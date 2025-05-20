@@ -31,7 +31,7 @@ async def avaliar(enunciado: str = Form(...), arquivos: UploadFile = File(...)):
     os.makedirs(RESULT_DIR)
 
     # Salva e extrai entregas
-    zip_path = os.path.join(UPLOAD_DIR, arquivos.filename)
+    zip_path = os.path.join(UPLOAD_DIR, str(arquivos.filename))
     with open(zip_path, "wb") as f:
         shutil.copyfileobj(arquivos.file, f)
 

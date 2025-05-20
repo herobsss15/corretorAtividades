@@ -1,34 +1,38 @@
 import requests
 import os
+from dotenv import load_dotenv
+from azure.ai.inference import ChatCompletionsClient
+from azure.ai.inference.models import SystemMessage, UserMessage
+from azure.core.credentials import AzureKeyCredential
 
-GITHUB_MODEL_API_URL = "https://api.githubcopilot.com/chat/completions"
-GITHUB_PAT = os.getenv("GITHUB_PAT")
+# Carrega variáveis do .env
+load_dotenv()
+
+# Endpoint e modelo
+endpoint = "https://models.github.ai/inference"
+model = "deepseek/DeepSeek-V3-0324"  # pode mudar para qualquer outro disponível
+
+# Token GitHub
+token = os.getenv("GITHUB_TOKEN")
+if not token:
+    raise Exception("Variável GITHUB_TOKEN não encontrada no .env")
+
+# Cria cliente da Azure
+client = ChatCompletionsClient(
+    endpoint=endpoint,
+    credential=AzureKeyCredential(token),
+)
+
 def gerar_criterios_com_ia(enunciado: str):
-    if not GITHUB_PAT:
-        raise Exception("Variável de ambiente GITHUB_PAT não definida")
+    response = client.complete(
+        messages=[
+            SystemMessage("Você é um corretor de atividades de programação."),
+            UserMessage(f"Extraia os critérios de correção do seguinte enunciado:\n\n{enunciado}")
+        ],
+        temperature=0.7,
+        top_p=1.0,
+        max_tokens=1000,
+        model=model
+    )
 
-    payload = {
-        "model": "gpt-4",  # ou "gpt-4-1106-preview" se preferir especificar
-        "messages": [
-            {
-                "role": "system",
-                "content": "Você é um avaliador de atividades de programação. Converta o enunciado em critérios de avaliação claros e objetivos, como: estrutura de classes, métodos obrigatórios, regras de negócio, etc."
-            },
-            {
-                "role": "user",
-                "content": f"Enunciado da atividade:\n\n{enunciado}"
-            }
-        ]
-    }
-
-    headers = {
-        "Authorization": f"Bearer {GITHUB_PAT}",
-        "Content-Type": "application/json"
-    }
-
-    response = requests.post(GITHUB_MODEL_API_URL, json=payload, headers=headers)
-
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        raise Exception(f"Erro na API GitHub Model: {response.status_code} - {response.text}")
+    return response.choices[0].message.content
