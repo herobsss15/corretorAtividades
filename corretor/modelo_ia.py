@@ -1,38 +1,45 @@
-import requests
 import os
 from dotenv import load_dotenv
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.models import SystemMessage, UserMessage
-from azure.core.credentials import AzureKeyCredential
+from openai import OpenAI
 
-# Carrega variáveis do .env
 load_dotenv()
-
-# Endpoint e modelo
-endpoint = "https://models.github.ai/inference"
-model = "deepseek/DeepSeek-V3-0324"  # pode mudar para qualquer outro disponível
 
 # Token GitHub
 token = os.getenv("GITHUB_TOKEN")
 if not token:
     raise Exception("Variável GITHUB_TOKEN não encontrada no .env")
 
-# Cria cliente da Azure
-client = ChatCompletionsClient(
-    endpoint=endpoint,
-    credential=AzureKeyCredential(token),
+# Endpoint e modelo
+endpoint = "https://models.github.ai/inference"
+model_name = "openai/gpt-4o"
+
+# Cliente OpenAI via GitHub Models
+client = OpenAI(
+    base_url=endpoint,
+    api_key=token,
 )
 
 def gerar_criterios_com_ia(enunciado: str):
-    response = client.complete(
+    response = client.chat.completions.create(
         messages=[
-            SystemMessage("Você é um corretor de atividades de programação."),
-            UserMessage(f"Extraia os critérios de correção do seguinte enunciado:\n\n{enunciado}")
+            {
+                "role": "system",
+                "content": (
+                    "Você é um corretor de programação. Retorne os critérios como checklist simples. "
+                    "Cada linha deve iniciar com um verbo no infinitivo e conter no máximo 12 palavras. "
+                    "Use o formato '[ ] critério'. Foque em aspectos verificáveis automaticamente como funções, mensagens e lógica de controle de fluxo."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Avalie este enunciado e extraia os critérios de correção:\n\n{enunciado}",
+            }
         ],
-        temperature=0.7,
+        temperature=0.2,
         top_p=1.0,
-        max_tokens=1000,
-        model=model
+        max_tokens=1200,
+        model=model_name
     )
+    
 
     return response.choices[0].message.content
