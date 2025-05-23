@@ -3,6 +3,7 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os, shutil, zipfile, rarfile, json
+from datetime import datetime 
 
 rarfile.UNRAR_TOOL = r"C:\\Program Files\\WinRAR\\unrar.exe"
 
@@ -27,9 +28,19 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 
 @app.post("/avaliar")
 async def avaliar(enunciado: str = Form(...), arquivos: List[UploadFile] = File(...), usar_ia_direta: bool = Form(False)):
+    """
+    Endpoint principal para avaliar entregas de alunos com base em um enunciado.
+    
+    Args:
+        enunciado: Texto descritivo da atividade a ser avaliada
+        arquivos: Lista de arquivos ZIP/RAR contendo os códigos dos alunos
+        usar_ia_direta: Se True, usa avaliação direta por IA; se False, usa busca por palavras-chave
+    """
+    # Limpa apenas o diretório de uploads, mantendo o histórico de resultados
     shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
-    shutil.rmtree(RESULT_DIR, ignore_errors=True)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    
+    # Garantir que o diretório de resultados existe, sem remover seu conteúdo
     os.makedirs(RESULT_DIR, exist_ok=True)
 
     for arquivo in arquivos:
@@ -63,69 +74,108 @@ async def avaliar(enunciado: str = Form(...), arquivos: List[UploadFile] = File(
         else:
             print(f"Formato não suportado: {extensao}")
 
-    # Gera os critérios para avaliação
+    # *** OTIMIZAÇÃO: GERAR O CHECKLIST APENAS UMA VEZ ***
+    # Gera os critérios de avaliação a partir do enunciado uma única vez
     criterios = gerar_criterios_com_ia(enunciado)
-    
-    # Se usar_ia_direta for True, usa o novo pipeline para cada pasta de aluno
+    print("Checklist gerado com sucesso!")
+
     if usar_ia_direta:
+        # Método de avaliação direta por IA
         resultados = {}
-        
+
+        # Para cada pasta de aluno
         for aluno_pasta in os.listdir(UPLOAD_DIR):
             aluno_path = os.path.join(UPLOAD_DIR, aluno_pasta)
             if not os.path.isdir(aluno_path):
                 continue
-                
-            # Concatena todo o código do aluno
+
+            print(f"Avaliando {aluno_pasta}...")
             codigo_completo = ""
             for root, _, files in os.walk(aluno_path):
                 for file in files:
                     if file.endswith(".cs"):
                         with open(os.path.join(root, file), encoding="utf-8", errors="ignore") as f:
                             codigo_completo += f.read() + "\n\n"
-            
-            # Usa o pipeline para avaliar
+
             if codigo_completo:
                 try:
-                    resultado = pipeline_gerar_e_avaliar(enunciado, codigo_completo)
+                    # *** OTIMIZAÇÃO: USAR APENAS O MÉTODO DE AVALIAÇÃO ***
+                    # Em vez de chamar pipeline_gerar_e_avaliar, chamamos apenas avaliar_codigo_com_criterios
+                    # para reutilizar o checklist já gerado
+                    from corretor.modelo_ia import avaliar_codigo_com_criterios
+                    avaliacao_str = avaliar_codigo_com_criterios(enunciado, criterios, codigo_completo)
                     
-                    # Processar o resultado da avaliação - corrigir o formato do JSON
-                    if isinstance(resultado["avaliacao"], str):
-                        # Remover backticks de código e "json" se presentes
-                        avaliacao_str = resultado["avaliacao"]
-                        avaliacao_str = avaliacao_str.replace("```json", "").replace("```", "").strip()
-                        
-                        # Tentar converter para JSON
+                    # Processa o resultado da avaliação
+                    avaliacao_json = None
+                    try:
+                        import json
+                        # Primeiro, tentar analisar diretamente
+                        avaliacao_json = json.loads(avaliacao_str)
+                    except json.JSONDecodeError:
+                        # Se falhar, tentar limpar a string
                         try:
-                            import json
-                            resultado["avaliacao"] = json.loads(avaliacao_str)
-                            print(f"Avaliação processada com sucesso para {aluno_pasta}")
+                            cleaned_str = avaliacao_str.replace("```json", "").replace("```", "").strip()
+                            avaliacao_json = json.loads(cleaned_str)
                         except json.JSONDecodeError as e:
-                            print(f"Erro ao converter JSON para {aluno_pasta}: {str(e)}")
-                            print(f"String problemática: {avaliacao_str[:100]}...")
-                            resultado["avaliacao_raw"] = avaliacao_str
-                            resultado["avaliacao"] = {"erro": "Formato de JSON inválido"}
+                            avaliacao_json = {
+                                "erro": "Falha ao analisar JSON",
+                                "mensagem": str(e),
+                                "avaliacao_raw": avaliacao_str[:200] + "..." if len(avaliacao_str) > 200 else avaliacao_str
+                            }
                     
-                    resultados[aluno_pasta] = resultado
+                    # Agora, montamos o resultado na mesma estrutura que antes
+                    resultados[aluno_pasta] = {
+                        "checklist": criterios,  # Mesma checklist para todos
+                        "avaliacao": avaliacao_json
+                    }
+                    
                 except Exception as e:
                     print(f"Erro ao avaliar {aluno_pasta}: {str(e)}")
                     resultados[aluno_pasta] = {"erro": str(e)}
             else:
                 resultados[aluno_pasta] = {"erro": "Nenhum arquivo .cs encontrado"}
-                
-        return JSONResponse({
+
+        output = {
             "criterios": criterios,
             "avaliacoes_ia": resultados
-        })
+        }
+
     else:
-        # Usa o método tradicional de avaliação baseado em palavras-chave
+        # Método tradicional de avaliação baseado em palavras-chave
         relatorio = avaliar_entregas(UPLOAD_DIR, criterios)
-        return JSONResponse({
+        output = {
             "criterios": criterios,
             "relatorio": relatorio
-        })
+        }
 
-# Endpoint adicional só para avaliação direta por IA
+    # Salvar resultado final com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"resultado_avaliacao_{timestamp}.json"
+    output_path = os.path.join(RESULT_DIR, output_filename)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+
+    return JSONResponse(output)
+
 @app.post("/avaliar-ia")
 async def avaliar_ia(enunciado: str = Form(...), codigo: str = Form(...)):
+    """
+    Endpoint para avaliar um único código diretamente.
+    Útil para testes e avaliações individuais.
+    
+    Args:
+        enunciado: Texto descritivo da atividade
+        codigo: Código-fonte a ser avaliado
+    """
     resultado = pipeline_gerar_e_avaliar(enunciado, codigo)
+    
+    # Salvar também este resultado com timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"resultado_ia_direta_{timestamp}.json"
+    output_path = os.path.join(RESULT_DIR, output_filename)
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(resultado, f, indent=2, ensure_ascii=False)
+    
     return JSONResponse(resultado)
