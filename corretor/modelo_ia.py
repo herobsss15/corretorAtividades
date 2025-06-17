@@ -111,7 +111,7 @@ def avaliar_codigo_com_criterios(enunciado: str, checklist: str, codigo: str) ->
                 "content": f"Enunciado:\n{enunciado}\n\nChecklist:\n{checklist}\n\nCódigo:\n{codigo}",
             }
         ],
-        temperature=0.3,
+        temperature=0.25,
         top_p=1.0,
         max_tokens=1800,
         model=model_name
@@ -120,9 +120,45 @@ def avaliar_codigo_com_criterios(enunciado: str, checklist: str, codigo: str) ->
 
 # Função pipeline: gera checklist e avalia o código
 def pipeline_gerar_e_avaliar(enunciado: str, codigo: str) -> dict:
+    """
+    Pipeline completo: gera critérios de avaliação e avalia o código.
+    
+    Args:
+        enunciado: Texto do enunciado da atividade
+        codigo: Código-fonte a ser avaliado
+    
+    Returns:
+        Dicionário contendo o checklist e a avaliação
+    """
+    import json
+    
+    # Gera os critérios de avaliação
     checklist = gerar_criterios_com_ia(enunciado)
-    avaliacao = avaliar_codigo_com_criterios(enunciado, checklist, codigo)
-    return {
+    
+    # Avalia o código com base nos critérios
+    avaliacao_str = avaliar_codigo_com_criterios(enunciado, checklist, codigo)
+    
+    # Processa o resultado da avaliação
+    avaliacao_json = None
+    try:
+        # Primeiro, tentar analisar diretamente
+        avaliacao_json = json.loads(avaliacao_str)
+    except json.JSONDecodeError:
+        # Se falhar, tentar limpar a string
+        try:
+            cleaned_str = avaliacao_str.replace("```json", "").replace("```", "").strip()
+            avaliacao_json = json.loads(cleaned_str)
+        except json.JSONDecodeError as e:
+            avaliacao_json = {
+                "erro": "Falha ao analisar JSON",
+                "mensagem": str(e),
+                "avaliacao_raw": avaliacao_str[:200] + "..." if len(avaliacao_str) > 200 else avaliacao_str
+            }
+    
+    # Constrói o resultado base
+    resultado = {
         "checklist": checklist,
-        "avaliacao": avaliacao
+        "avaliacao": avaliacao_json
     }
+    
+    return resultado
